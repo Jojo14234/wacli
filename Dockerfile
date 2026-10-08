@@ -10,7 +10,7 @@ RUN CGO_ENABLED=1 CGO_CFLAGS="-Wno-error=missing-braces" GOOS=linux \
     go build -tags sqlite_fts5 -trimpath -ldflags="-s -w" -o /out/wacli ./cmd/wacli
 
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
-RUN apk add --no-cache ca-certificates ffmpeg tzdata \
+RUN apk add --no-cache ca-certificates ffmpeg tzdata python3 py3-pip \ \
     && adduser -D -u 10001 -h /home/wacli wacli \
     && mkdir -p /data/store /data/state /data/config /data/cache \
     && chown -R wacli:wacli /data
