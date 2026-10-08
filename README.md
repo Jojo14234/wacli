@@ -1,126 +1,72 @@
-# wacli 🗃️ — WhatsApp from your terminal
+# Joachim WhatsApp MCP — read-only navigation upgrade
 
-![wacli banner](docs/assets/readme-banner.jpg)
+Drop-in replacement for `whatsapp_mcp_step9.py`, designed for the existing Railway `whatsapp-wacli` service. It is **not a public ChatGPT connector yet**. It runs an MCP Streamable HTTP server bound to `127.0.0.1:8765` without public authentication. **Do not expose it via a Railway public domain or proxy before adding OAuth access control.**
 
-[![CI](https://img.shields.io/github/actions/workflow/status/openclaw/wacli/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/openclaw/wacli/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/openclaw/wacli?style=flat-square)](https://github.com/openclaw/wacli/releases/latest)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-blue?style=flat-square)](https://github.com/openclaw/wacli/releases/latest)
-[![License](https://img.shields.io/github/license/openclaw/wacli?style=flat-square)](LICENSE)
-[![Homebrew](https://img.shields.io/badge/Homebrew-openclaw%2Ftap-orange?style=flat-square)](https://github.com/openclaw/homebrew-tap)
-[![Docs](https://img.shields.io/badge/docs-wacli.sh-blue?style=flat-square)](https://wacli.sh)
+## Why this version
 
-`wacli` is a scriptable WhatsApp client for people and tools that work from the command line. It pairs as a linked device, mirrors messages into a local SQLite store, and supports search, sending, and chat management.
+`wacli messages list` supports date filtering and a result limit, but not a reliable offset. Instead of retrieving thousands of messages or skipping dense windows, this implementation reads `<store>/wacli.db` with SQLite **`mode=ro` plus `query_only=ON`**, using ordered keyset cursors. It also uses the `wacli --read-only --json` CLI for canonical searches, contact lookup, context and diagnostics. The schema is documented at https://github.com/openclaw/wacli/blob/main/internal/store/schema.sql and direct read-only access at https://github.com/openclaw/wacli/blob/main/docs/integrations.md .
 
-> `wacli` uses the WhatsApp Web protocol through [`whatsmeow`](https://github.com/tulir/whatsmeow). It is not affiliated with WhatsApp or Meta.
+## MCP tools (15)
 
-## Install
+| Tool | Purpose |
+|---|---|
+| `archive_status` | Message count, coverage timestamps, stable snapshot high-watermark |
+| `list_chats` | Find chats by partial name or JID, including groups |
+| `recent_activity` | Chat-level message counts/direction during a date window, no bodies |
+| `get_new_messages` | Guaranteed bounded rowid pages for inserted messages with snapshot |
+| `get_messages` | Timestamp/date/chat/direction/media filtered keyset pagination |
+| `get_edited_or_deleted_messages` | Detect in-place edits and deletions; omit deleted bodies |
+| `get_starred_messages` | Browse manually starred messages with pagination |
+| `search_messages_paged` | Literal substring search with complete cursor pagination |
+| `search_messages_fast` | `wacli` full-text search (FTS5 when supported) |
+| `get_message` | Fetch one message by chat ID and message ID |
+| `get_message_context` | Neighboring messages around an identified message |
+| `find_contacts` | Resolve a person to matching stored contacts |
+| `history_coverage` | Inspect historical sync coverage and gaps |
+| `sync_diagnostics` | Local-only `wacli doctor` status |
+| `review_instructions` | Safe agent workflow, checkpoints and limitations |
 
-Homebrew on macOS or Linux:
+No send, edit, delete, mark-read, login, sync or arbitrary shell tool is available.
 
-```sh
-brew install openclaw/tap/wacli
+## Drop into your *local* cloned `wacli` repository
+
+1. Save `whatsapp_mcp.py` next to your local `Dockerfile`.
+2. Make sure the **final runtime image** contains Python 3.10+ and the MCP Python SDK. With Alpine, you can use `python3`, `py3-pip` and a virtual environment, but **fix the existing `apk add` build error first**; it is separate from the MCP code. Do not assume the build is solved until Railway prints the actual root cause.
+3. Add this to the Dockerfile **after installing Python and before the `USER wacli` line**:
+
+   ```dockerfile
+   RUN python3 -m venv /opt/wa-mcp \
+       && /opt/wa-mcp/bin/pip install --no-cache-dir 'mcp==1.26.0'
+   COPY whatsapp_mcp.py /opt/whatsapp_mcp.py
+   ```
+
+4. Deploy using your existing method: `railway up --service whatsapp-wacli`.
+5. SSH into the running Railway service and test the archive, without showing message contents:
+
+   ```bash
+   WACLI_STORE_DIR=/data/store /opt/wa-mcp/bin/python /opt/whatsapp_mcp.py --self-test
+   WACLI_STORE_DIR=/data/store /opt/wa-mcp/bin/python /opt/whatsapp_mcp.py --list-tools
+   ```
+
+6. **Do not change the Railway start command yet.** It should keep `wacli sync --follow` running. The MCP server is installed but **not running** until we configure a process supervisor or entrypoint that launches both services, and add OAuth before making it public.
+
+## Suggested task-triage algorithm
+
+1. `sync_diagnostics` / `history_coverage` to establish the index is usable and recognize gaps.
+2. `archive_status` to get the current `snapshot_rowid`.
+3. `recent_activity(after=..., before=..., snapshot_rowid=...)` to find active chats cheaply.
+4. `get_new_messages(after_rowid=checkpoint, snapshot_rowid=..., limit=50)` repeatedly until `has_more=false`. For the **first** review, use `after=YYYY-MM-DD` if only seven days are desired. Later runs should omit the `after` filter so delayed historical imports are not silently skipped.
+5. Use `get_message_context` and `get_messages` for ambiguous requests; use `search_messages_fast` for cross-chat topics and `search_messages_paged` if a complete set of search matches is required.
+6. `get_edited_or_deleted_messages` on an overlapping time window to catch edits and deletions to already indexed messages.
+7. Compare candidate obligations with both active and completed Todoist tasks; never assume every outgoing request is a pending task.
+8. Only after **all** relevant Todoist updates succeed should the caller durably save the `next_rowid` checkpoint. This MCP is deliberately stateless and stores no checkpoints itself.
+
+**Limitations:** WhatsApp controls historical backfill; voice-note audio and image contents are not transcribed by this server, only message metadata/captions/fallbacks appear. In-place edits do not change the original message rowid, which is why the overlap and edits tool exist. SQLite schema changes in later `wacli` releases may require updating the bridge. All timestamps are UTC; ISO dates are interpreted at UTC midnight.
+
+## Offline tests
+
+```bash
+python3 -m unittest discover -s . -p 'test_*.py' -v
 ```
 
-Prebuilt archives for macOS, Linux, and Windows are available from [GitHub Releases](https://github.com/openclaw/wacli/releases/latest). Official macOS binaries require macOS 15 (Sequoia) or newer.
-
-To build from source, install Go 1.27.0 or newer and a C compiler, then run:
-
-```sh
-CGO_ENABLED=1 CGO_CFLAGS="-Wno-error=missing-braces" \
-  go install -tags sqlite_fts5 github.com/openclaw/wacli/cmd/wacli@latest
-```
-
-See the [installation guide](docs/install.md) for release archives, Docker, and platform-specific build requirements.
-
-## Quick start
-
-Pair the CLI by scanning the terminal QR code from WhatsApp's **Linked devices** screen. `auth` performs the first sync after pairing.
-
-```sh
-wacli auth
-wacli messages search "meeting"
-wacli send text --to +15551234567 --message "hello"
-```
-
-Sending requires a recipient you are allowed to contact. Recipients can be phone numbers, WhatsApp JIDs, or synced contact, group, and chat names.
-
-The [quickstart](docs/quickstart.md) covers phone-number pairing, named accounts, media, and diagnostics.
-
-## Keep messages in sync
-
-Run a continuous sync to keep the local store current:
-
-```sh
-wacli sync --follow
-```
-
-`wacli` keeps the WhatsApp session and its own searchable message index in separate SQLite databases. Search reads the local index, so it works without a live WhatsApp connection:
-
-```sh
-wacli messages search "invoice" --has-media
-wacli --json messages list --limit 20
-```
-
-WhatsApp Web provides history on a best-effort basis. Use [`history coverage`](docs/history.md) to inspect what is available locally before requesting older messages from the primary phone.
-
-## Use wacli from scripts
-
-Human-readable tables are the default. Use `--json` for one-shot commands and `--events` for NDJSON lifecycle events from long-running commands. Progress and errors stay on stderr.
-
-Use `--read-only` or `WACLI_READONLY=1` when an integration must not change WhatsApp or the local store:
-
-```sh
-wacli --read-only --json messages search "invoice"
-WACLI_READONLY=1 wacli --json doctor
-```
-
-Write commands take a per-store lock. After a `sync --follow` process finishes startup, supported send commands, the `chats` state commands (`mark-read`, `archive`, `pin`, `mute`, and their inverses), and `contacts check` are delegated to it while it owns that lock. See [companion integrations](docs/integrations.md) for webhooks and safe read-only SQLite access.
-
-## Commands
-
-| Area | What it covers |
-| --- | --- |
-| [`auth`](docs/auth.md), [`accounts`](docs/accounts.md) | Pair a linked device and manage isolated account stores. |
-| [`sync`](docs/sync.md), [`history`](docs/history.md) | Mirror new events and request older per-chat history. |
-| [`messages`](docs/messages.md), [`calls`](docs/calls.md) | Search, inspect, export, and manage local records. |
-| [`send`](docs/send.md), [`media`](docs/media.md) | Send text and files or download synced media. |
-| [`contacts`](docs/contacts.md), [`chats`](docs/chats.md) | Find people and manage local or remote chat state. |
-| [`groups`](docs/groups.md), [`channels`](docs/channels.md) | Inspect and manage groups, communities, and channels. |
-| [`profile`](docs/profile.md), [`presence`](docs/presence.md) | Manage profile details and chat presence. |
-| [`store`](docs/store.md), [`doctor`](docs/doctor.md) | Inspect local storage and diagnose the setup. |
-
-The complete documentation is at [wacli.sh](https://wacli.sh), or run `wacli help <command>` for the installed command reference.
-
-## Configuration
-
-The default store is `~/.local/state/wacli` on Linux and `~/.wacli` elsewhere. Override it with `--store DIR` or `WACLI_STORE_DIR`; use named accounts when each WhatsApp identity needs its own session, database, and lock.
-
-```sh
-wacli accounts add work
-wacli --account work sync --follow
-```
-
-See [accounts](docs/accounts.md) for store selection and [sync](docs/sync.md) for storage limits, media downloads, webhooks, and presence behavior.
-
-## Development
-
-Development uses the Go 1.27.1 toolchain selected by `go.mod`, Node.js 24 or newer, pnpm, cgo, and a C compiler. The source minimum remains Go 1.27.0.
-
-```sh
-pnpm install --frozen-lockfile
-pnpm build
-pnpm format:check && pnpm lint && pnpm test
-```
-
-## Credits
-
-Heavily inspired by [`whatsapp-cli`](https://github.com/vicentereig/whatsapp-cli) by Vicente Reig.
-
-## Maintainers
-
-- Created by [@steipete](https://github.com/steipete)
-- Currently maintained by [@dinakars777](https://github.com/dinakars777)
-
-## License
-
-[MIT](LICENSE).
+Tests use fake SQLite rows and a mocked CLI; they never access WhatsApp, Google, Todoist or Railway.
