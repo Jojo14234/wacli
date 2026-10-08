@@ -21,6 +21,10 @@ ENV HOME=/home/wacli \
     XDG_CACHE_HOME=/data/cache
 WORKDIR /data
 COPY --from=build /out/wacli /usr/local/bin/wacli
+RUN python3 -m venv /opt/wa-mcp \
+    && /opt/wa-mcp/bin/pip install --no-cache-dir 'mcp==1.26.0'
+
+COPY whatsapp_mcp.py /opt/whatsapp_mcp.py
 USER wacli
 ENTRYPOINT ["wacli"]
 CMD ["--help"]
