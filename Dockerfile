@@ -19,7 +19,6 @@ ENV HOME=/home/wacli \
     XDG_STATE_HOME=/data/state \
     XDG_CONFIG_HOME=/data/config \
     XDG_CACHE_HOME=/data/cache
-VOLUME ["/data"]
 WORKDIR /data
 COPY --from=build /out/wacli /usr/local/bin/wacli
 USER wacli
