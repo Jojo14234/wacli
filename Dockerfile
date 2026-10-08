@@ -26,6 +26,8 @@ RUN python3 -m venv /opt/wa-mcp \
 
 COPY whatsapp_mcp.py /opt/whatsapp_mcp.py
 COPY --from=ghcr.io/openai/tunnel-client:v0.0.16 /usr/bin/tunnel-client /usr/local/bin/tunnel-client
+COPY start.sh /usr/local/bin/start.sh
+RUN chmod +x /usr/local/bin/start.sh
 USER wacli
 ENTRYPOINT ["wacli"]
 CMD ["--help"]
