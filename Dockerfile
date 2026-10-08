@@ -22,7 +22,7 @@ ENV HOME=/home/wacli \
 WORKDIR /data
 COPY --from=build /out/wacli /usr/local/bin/wacli
 RUN python3 -m venv /opt/wa-mcp \
-    && /opt/wa-mcp/bin/pip install --no-cache-dir 'mcp==1.26.0'
+    && /opt/wa-mcp/bin/pip install --no-cache-dir 'mcp==2.3.0'
 
 COPY whatsapp_mcp.py /opt/whatsapp_mcp.py
 COPY --from=ghcr.io/openai/tunnel-client:v0.0.16 /usr/bin/tunnel-client /usr/local/bin/tunnel-client

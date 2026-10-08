@@ -532,9 +532,10 @@ TOOLS=[archive_status,list_chats,recent_activity,get_new_messages,get_messages,
 
 
 def make_server():
-    from mcp.server.fastmcp import FastMCP
-    srv=FastMCP("Joachim WhatsApp Archive (read-only)",host="127.0.0.1",port=8765,
-                stateless_http=True,json_response=True)
+    # MCP Python SDK v2 implements server/discover (2026-07-28), required by
+    # ChatGPT tunnel plugin discovery; v1 FastMCP does not support this method.
+    from mcp.server import MCPServer
+    srv = MCPServer("Joachim WhatsApp Archive (read-only)")
     for func in TOOLS:
         srv.tool()(func)
     return srv
@@ -548,6 +549,7 @@ if __name__=="__main__":
         print("\n".join(f.__name__ for f in TOOLS))
     elif len(sys.argv)==1:
         # LOCAL only. Adding authentication and public routing is a separate step.
-        make_server().run(transport="streamable-http")
+        make_server().run(transport="streamable-http", host="127.0.0.1", port=8765,
+                          stateless_http=True, json_response=True)
     else:
         raise SystemExit("Usage: whatsapp_mcp.py [--self-test|--list-tools]")
